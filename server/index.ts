@@ -1,4 +1,5 @@
-import { stripCodeFences, ensureRenderCall } from './generator';
+import { buildFinalCode } from './generator';
+import { parseAnthropicEvent, extractGoogleDelta, readSseStream, toErrorPayload } from './stream';
 import { withModelFallback } from './fallback';
 
 // 우선순위 순서. 앞 모델이 실패하면 다음 모델로 폴백한다.
@@ -65,9 +66,17 @@ function resolveApiKey(provider: Provider, clientKey?: string): string | null {
   return clientKey || ENV_KEYS[provider] || null;
 }
 
-async function callAnthropic(prompt: string, apiKey: string): Promise<string> {
+type Emit = (event: Record<string, unknown>) => void;
+
+async function streamAnthropic(
+  prompt: string,
+  apiKey: string,
+  emit: Emit,
+  signal: AbortSignal,
+): Promise<string> {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
@@ -76,6 +85,7 @@ async function callAnthropic(prompt: string, apiKey: string): Promise<string> {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 4096,
+      stream: true,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -85,21 +95,34 @@ async function callAnthropic(prompt: string, apiKey: string): Promise<string> {
     throw new Error(`Claude API error: ${response.status}`);
   }
 
-  const data = (await response.json()) as {
-    content: Array<{ type: string; text?: string }>;
-  };
+  if (!response.body) throw new Error('응답 스트림이 없습니다.');
 
-  return data.content
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('');
+  let full = '';
+  let stopped = false;
+  await readSseStream(response.body, (data) => {
+    const { text, stop } = parseAnthropicEvent(data);
+    if (stop) stopped = true;
+    if (text) {
+      full += text;
+      emit({ type: 'delta', text });
+    }
+  });
+  if (!stopped) throw new Error('응답 스트림이 중간에 끊겼습니다. 다시 시도해주세요.');
+  return full;
 }
 
-async function callGoogleModel(prompt: string, apiKey: string, model: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+async function streamGoogleModel(
+  prompt: string,
+  apiKey: string,
+  model: string,
+  emit: Emit,
+  signal: AbortSignal,
+): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
   const response = await fetch(url, {
     method: 'POST',
+    signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
@@ -112,27 +135,39 @@ async function callGoogleModel(prompt: string, apiKey: string, model: string): P
     throw new Error(`Gemini API error: ${response.status}`);
   }
 
-  const data = (await response.json()) as {
-    candidates: Array<{
-      content: { parts: Array<{ text?: string }> };
-      finishReason?: string;
-    }>;
-  };
+  if (!response.body) throw new Error('응답 스트림이 없습니다.');
 
-  const candidate = data.candidates?.[0];
-  if (candidate?.finishReason === 'MAX_TOKENS') {
+  // 폴백 재시도 시 클라이언트가 앞선 부분 코드를 버리도록 알린다.
+  emit({ type: 'reset' });
+
+  let full = '';
+  let truncated = false;
+  await readSseStream(response.body, (data) => {
+    const { text, truncated: t } = extractGoogleDelta(data);
+    if (t) truncated = true;
+    if (text) {
+      full += text;
+      emit({ type: 'delta', text });
+    }
+  });
+
+  if (truncated) {
     throw new Error('생성된 코드가 너무 길어 잘렸습니다. 더 간단한 컴포넌트를 요청해주세요.');
   }
-
-  return (
-    candidate?.content?.parts
-      ?.map((part) => part.text)
-      ?.join('') ?? ''
-  );
+  return full;
 }
 
-async function callGoogle(prompt: string, apiKey: string): Promise<string> {
-  return withModelFallback(GOOGLE_MODELS, (model) => callGoogleModel(prompt, apiKey, model));
+async function streamGoogle(
+  prompt: string,
+  apiKey: string,
+  emit: Emit,
+  signal: AbortSignal,
+): Promise<string> {
+  return withModelFallback(GOOGLE_MODELS, (model) => {
+    // 클라이언트가 끊겼으면 다음 폴백 모델을 시도하지 않는다.
+    if (signal.aborted) throw new Error('요청이 취소되었습니다.');
+    return streamGoogleModel(prompt, apiKey, model, emit, signal);
+  });
 }
 
 const server = Bun.serve({
@@ -180,35 +215,50 @@ const server = Bun.serve({
           );
         }
 
-        const text =
-          provider === 'google'
-            ? await callGoogle(prompt, resolvedKey)
-            : await callAnthropic(prompt, resolvedKey);
+        // NDJSON 스트림: delta(코드 조각) / reset(폴백 재시도) / done(최종 코드) / error
+        const encoder = new TextEncoder();
+        const abort = new AbortController();
+        const stream = new ReadableStream({
+          async start(controller) {
+            // 클라이언트가 끊어 스트림이 닫힌 뒤의 enqueue/close 예외는 무시한다.
+            const emit: Emit = (event) => {
+              try {
+                controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+              } catch {
+                // 이미 취소된 스트림
+              }
+            };
+            try {
+              const text =
+                provider === 'google'
+                  ? await streamGoogle(prompt, resolvedKey, emit, abort.signal)
+                  : await streamAnthropic(prompt, resolvedKey, emit, abort.signal);
+              emit({ type: 'done', code: buildFinalCode(text) });
+            } catch (err) {
+              emit({ type: 'error', ...toErrorPayload(err) });
+            } finally {
+              try {
+                controller.close();
+              } catch {
+                // 이미 취소된 스트림
+              }
+            }
+          },
+          cancel() {
+            abort.abort();
+          },
+        });
 
-        const code = ensureRenderCall(stripCodeFences(text));
-
-        return Response.json({ code }, { headers: CORS_HEADERS });
+        return new Response(stream, {
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/x-ndjson',
+            'Cache-Control': 'no-cache',
+          },
+        });
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-
-        if (message.includes('503')) {
-          return Response.json(
-            { error: 'API 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.' },
-            { status: 503, headers: CORS_HEADERS }
-          );
-        }
-
-        if (message.includes('429')) {
-          return Response.json(
-            { error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' },
-            { status: 429, headers: CORS_HEADERS }
-          );
-        }
-
-        return Response.json(
-          { error: message },
-          { status: 500, headers: CORS_HEADERS }
-        );
+        const { error, status } = toErrorPayload(err);
+        return Response.json({ error }, { status, headers: CORS_HEADERS });
       }
     }
 

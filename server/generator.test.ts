@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripCodeFences, ensureRenderCall } from './generator';
+import { stripCodeFences, ensureRenderCall, buildFinalCode } from './generator';
 
 describe('stripCodeFences', () => {
   it('언어 태그가 붙은 코드펜스를 제거한다', () => {
@@ -14,6 +14,19 @@ describe('stripCodeFences', () => {
 
   it('펜스가 없으면 앞뒤 공백만 정리해 그대로 반환한다', () => {
     expect(stripCodeFences('  const A = 1;  ')).toBe('const A = 1;');
+  });
+});
+
+describe('buildFinalCode', () => {
+  it('펜스 제거와 render 주입을 순서대로 적용한다', () => {
+    expect(buildFinalCode('```jsx\nconst Card = () => null;\n```')).toBe(
+      'const Card = () => null;\n\nrender(<Card />);',
+    );
+  });
+
+  it('결과가 비어 있으면 에러를 던진다', () => {
+    expect(() => buildFinalCode('')).toThrow('비어');
+    expect(() => buildFinalCode('```\n```')).toThrow('비어');
   });
 });
 
