@@ -22,6 +22,7 @@ Do's & Don'ts:
 - 생성 코드 계약(시스템 프롬프트 `server/index.ts:7-49`)을 바꾸면 후처리(`server/generator.ts`)와 `LivePreview`를 함께 확인하라. 계약: import 금지, 인라인 스타일만, TypeScript 문법 금지, 마지막에 `render(<Name />)`.
 - `render` 호출 보장은 프롬프트(`index.ts:12`의 규칙)와 `ensureRenderCall`(`generator.ts:16`) 두 곳에서 이중으로 방어한다. 한쪽만 제거하지 마라.
 - 프로바이더 간 비대칭을 인지하라: Google만 모델 폴백(`index.ts:134-136`)과 `MAX_TOKENS` 검사(`index.ts:123`)가 있다. Anthropic 경로에는 없다. 변경 시 양쪽 의도를 확인하라.
+- 코드 구현(생성/수정)을 마치면 완료 보고 전에 `evaluator` 서브 에이전트(`.claude/agents/evaluator.md`, 읽기 전용·적대적 리뷰)를 호출한다. 변경 파일 목록과 구현 의도를 전달하고, Critical/Major 지적은 반영한 뒤 보고한다.
 - 포트 3002는 `server/index.ts:139`와 `vite.config.ts` 프록시 두 곳에 있다. 함께 변경하라.
 - 순수 로직은 `server/generator.ts`, `server/fallback.ts`에 두고 단위 테스트를 추가하라. `server/index.ts`는 `Bun.serve` 부수효과 때문에 테스트 대상이 아니며 로직을 늘리지 마라.
 
