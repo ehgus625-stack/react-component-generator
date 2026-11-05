@@ -251,6 +251,24 @@
   color: #6b6b6b;
 }
 
+.prompt-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.prompt-error {
+  color: var(--alert);
+}
+
+.prompt-counter--over {
+  color: var(--alert);
+  font-weight: bold;
+}
+
 /* 기본 버튼: 이중 링 + 노란 면 */
 .btn-generate {
   height: 48px;
