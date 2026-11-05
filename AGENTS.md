@@ -15,6 +15,7 @@
 Immutable:
 - API 키 경계: 서버 환경변수 키는 클라이언트로 값을 내보내지 않는다. `/api/config`는 boolean만 반환한다 (`server/index.ts:147-156`). 키 값을 응답, 로그, 에러 메시지에 포함하지 마라.
 - `.env`는 커밋 금지 (`.gitignore`). 키를 코드에 하드코딩하지 마라.
+- 민감 파일 접근 금지: `.env`, `.env.*`, `*secret*`, `*credential*`, `*.pem`, `*.key`, `id_rsa*`, `.npmrc`, `.ssh/`, `.aws/` 등은 읽기·수정·복사·출력 모두 금지한다. `.claude/settings.json`의 `permissions.deny`로 강제된다. 이 목록을 우회(셸 `cat`, `printenv`, 다른 도구로 읽기)하거나 deny 규칙을 약화·삭제하지 마라. 환경변수 설정이 필요하면 값을 요구하지 말고 사용자에게 직접 `.env` 편집을 요청하라.
 - 생성 코드는 react-live `noInline` 모드에서 실행된다 (`src/components/LivePreview.tsx:11`). 이 모드는 `render(...)` 호출이 없으면 아무것도 그리지 않는다.
 
 Do's & Don'ts:
