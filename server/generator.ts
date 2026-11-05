@@ -13,6 +13,13 @@ export function stripCodeFences(text: string): string {
  * react-live(noInline)는 `render(...)` 호출이 있어야 미리보기를 그린다.
  * 응답에 render 호출이 없으면 첫 컴포넌트 선언을 찾아 자동으로 주입한다.
  */
+/** 응답 텍스트를 최종 코드로 만든다. 순서 고정: stripCodeFences → ensureRenderCall. 빈 결과는 에러. */
+export function buildFinalCode(text: string): string {
+  const stripped = stripCodeFences(text);
+  if (!stripped) throw new Error('생성된 코드가 비어 있습니다. 다시 시도해주세요.');
+  return ensureRenderCall(stripped);
+}
+
 export function ensureRenderCall(code: string): string {
   if (/\brender\s*\(/.test(code)) return code;
 

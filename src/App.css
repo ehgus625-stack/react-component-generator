@@ -637,3 +637,8 @@
     padding: 16px;
   }
 }
+
+.component-card--streaming .code-block {
+  max-height: 420px;
+  overflow-y: auto;
+}

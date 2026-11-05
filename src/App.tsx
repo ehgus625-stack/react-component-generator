@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { PromptInput } from './components/PromptInput';
 import { ComponentCard } from './components/ComponentCard';
+import { StreamingCard } from './components/StreamingCard';
 import { useComponentGenerator } from './hooks/useComponentGenerator';
 import { usePersistentState } from './hooks/usePersistentState';
 import { addToHistory } from './utils/history';
@@ -30,7 +31,7 @@ function App() {
     anthropic: false,
     google: false,
   });
-  const { components, isLoading, error, generate, removeComponent, clearAll } =
+  const { components, pending, isLoading, error, generate, removeComponent, clearAll } =
     useComponentGenerator();
 
   useEffect(() => {
@@ -145,7 +146,7 @@ function App() {
         )}
 
         <section className="results-section" aria-label="생성 결과">
-          {components.length > 0 && (
+          {(components.length > 0 || pending) && (
             <div className="results-header">
               <h2>생성된 컴포넌트</h2>
               <button className="btn-clear" onClick={clearAll}>
@@ -176,21 +177,8 @@ function App() {
             </div>
           )}
 
-          {isLoading && (
-            <div className="win win--loading" role="status">
-              <div className="win-title">
-                <h2>생성 중</h2>
-              </div>
-              <div className="win-body">
-                <p>컴포넌트를 생성하고 있습니다...</p>
-                <div className="progress" aria-hidden="true">
-                  <div className="progress-bar" />
-                </div>
-              </div>
-            </div>
-          )}
-
           <div className="results-grid">
+            {pending && <StreamingCard pending={pending} />}
             {components.map((component) => (
               <ComponentCard
                 key={component.id}
